@@ -24,7 +24,7 @@ export function useWebSocket({
   const [isConnected, setIsConnected] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const shouldReconnectRef = useRef(true);
   const { setState, setError, endInterview } = useInterviewStore();
@@ -32,7 +32,22 @@ export function useWebSocket({
   const connect = useCallback(() => {
     if (!interviewId) return;
 
-    const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws';
+    // Use environment variable or auto-detect based on current location
+    let wsUrl = import.meta.env.VITE_WS_URL;
+    if (!wsUrl) {
+      // Auto-detect WebSocket URL based on current window location
+      // If running on same port as backend, use relative path
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      let host = window.location.host; // Includes port if present
+      
+      // Replace 0.0.0.0 with localhost for better compatibility
+      if (host.startsWith('0.0.0.0:')) {
+        host = host.replace('0.0.0.0', 'localhost');
+        console.warn('Replaced 0.0.0.0 with localhost for WebSocket connection');
+      }
+      
+      wsUrl = `${protocol}//${host}/ws`;
+    }
     const url = `${wsUrl}/${interviewId}`;
 
     try {
@@ -43,6 +58,8 @@ export function useWebSocket({
         setIsConnected(true);
         setConnectionError(null);
         reconnectAttemptsRef.current = 0;
+        // Reset shouldReconnect in case it was set to false previously
+        shouldReconnectRef.current = true;
       };
 
       ws.onmessage = (event) => {
@@ -94,16 +111,32 @@ export function useWebSocket({
 
       ws.onerror = (error) => {
         console.error('WebSocket error:', error);
-        setConnectionError('WebSocket connection error');
+        // Don't set error immediately - wait for onclose to get more details
         setIsConnected(false);
-        if (onError) {
-          onError(new Error('WebSocket connection error'));
-        }
       };
 
-      ws.onclose = () => {
-        console.log('WebSocket disconnected');
+      ws.onclose = (event) => {
+        console.log('WebSocket disconnected', { code: event.code, reason: event.reason, wasClean: event.wasClean });
         setIsConnected(false);
+
+        // If connection was closed unexpectedly (not clean), set error
+        if (!event.wasClean && event.code !== 1000) {
+          let errorMsg = 'WebSocket connection error';
+          
+          // Provide more specific error messages based on close code
+          if (event.code === 1006) {
+            errorMsg = 'Connection closed unexpectedly. Please ensure the backend server is running.';
+          } else if (event.code === 1001) {
+            errorMsg = 'Server is going away. Please check backend logs.';
+          } else if (event.reason) {
+            errorMsg = `Connection error: ${event.reason}`;
+          }
+          
+          setConnectionError(errorMsg);
+          if (onError) {
+            onError(new Error(errorMsg));
+          }
+        }
 
         // Attempt to reconnect if we should
         if (shouldReconnectRef.current && reconnectAttemptsRef.current < maxReconnectAttempts) {
@@ -114,8 +147,9 @@ export function useWebSocket({
             connect();
           }, reconnectInterval);
         } else if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
-          setConnectionError('Failed to reconnect after multiple attempts');
-          setError('Connection lost. Please refresh the page.');
+          const finalError = 'Failed to reconnect after multiple attempts. Please refresh the page.';
+          setConnectionError(finalError);
+          setError(finalError);
         }
       };
 

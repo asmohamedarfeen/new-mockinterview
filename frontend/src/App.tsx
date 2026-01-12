@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { InterviewRoom } from './components/InterviewRoom';
 import './App.css';
 

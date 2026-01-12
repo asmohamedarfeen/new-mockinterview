@@ -10,7 +10,7 @@ interface InterviewStore extends InterviewSession {
   addTranscriptEntry: (entry: TranscriptEntry) => void;
   startInterview: (interviewId: string) => void;
   endInterview: (feedback?: string, score?: number) => void;
-  setError: (error: string) => void;
+  setError: (error: string | undefined) => void;
   clearError: () => void;
   reset: () => void;
 }

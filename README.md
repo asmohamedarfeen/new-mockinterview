@@ -1,10 +1,10 @@
 # Virtual AI Interview Room
 
-A production-ready web application that simulates a real virtual interview room similar to Google Meet/Google Classroom with an AI interviewer powered by Google Gemini.
+A production-ready web application that simulates a real virtual interview room similar to Google Meet/Google Classroom with an AI interviewer powered by LM Studio (local LLM) with automatic fallback to Google Gemini.
 
 ## Features
 
-- **AI-Powered Interviewer**: Conducts realistic interviews using Google Gemini API
+- **AI-Powered Interviewer**: Conducts realistic interviews using LM Studio (local LLM) with automatic fallback to Google Gemini
 - **Voice Interaction**: Natural conversation with automatic speech recognition (STT) and text-to-speech (TTS)
 - **Google Meet-Style UI**: Professional interface with main stage, floating webcam preview, and transcript panel
 - **Privacy First**: Webcam video stays local-only, only text transcripts are sent to the backend
@@ -27,7 +27,9 @@ A production-ready web application that simulates a real virtual interview room 
 **Backend:**
 - Python FastAPI
 - WebSocket server
-- Google Gemini API integration
+- LM Studio integration (local LLM via OpenAI-compatible API)
+- Google Gemini API integration (fallback)
+- Unified AI service with automatic fallback
 - Interview state machine
 
 ### System Flow
@@ -45,7 +47,7 @@ Speech to Text
     ↓
 Send Transcript to Backend
     ↓
-Gemini Processes Answer
+AI Service Processes Answer (LM Studio or Gemini)
     ↓
 Next Question (TTS)
     ↓
@@ -64,7 +66,9 @@ new mockinterview/
 │   │   ├── main.py              # FastAPI app & WebSocket server
 │   │   ├── websocket_manager.py # WebSocket connection management
 │   │   ├── interview_state.py   # State machine logic
-│   │   ├── gemini_service.py    # Gemini API integration
+│   │   ├── ai_service.py         # Unified AI service with fallback
+│   │   ├── lm_studio_service.py  # LM Studio API integration
+│   │   ├── gemini_service.py    # Gemini API integration (fallback)
 │   │   └── models.py            # Pydantic models
 │   ├── requirements.txt
 │   └── .env.example
@@ -88,7 +92,8 @@ new mockinterview/
 - Python 3.8+
 - Node.js 18+
 - npm or yarn
-- Google Gemini API key ([Get one here](https://makersuite.google.com/app/apikey))
+- **LM Studio** (recommended): Download from [lmstudio.ai](https://lmstudio.ai/) and start a local server
+- **Google Gemini API key** (for fallback): [Get one here](https://makersuite.google.com/app/apikey)
 
 ### Backend Setup
 
@@ -113,12 +118,21 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-5. Edit `.env` and add your Gemini API key:
+5. Edit `.env` and configure your AI services:
 ```
+# LM Studio Configuration (Primary - Local LLM)
+LM_STUDIO_BASE_URL=http://localhost:1234
+USE_LM_STUDIO=true
+
+# Gemini Configuration (Fallback)
 GEMINI_API_KEY=your_gemini_api_key_here
+
+# Server Configuration
 PORT=8000
 CORS_ORIGINS=http://localhost:5173,http://localhost:3000
 ```
+
+**Note:** The system will try LM Studio first (if running), then automatically fall back to Gemini if LM Studio is unavailable. You can disable LM Studio by setting `USE_LM_STUDIO=false`.
 
 6. Run the backend server:
 ```bash
@@ -161,13 +175,52 @@ The frontend will be available at `http://localhost:5173`
 
 ## Usage
 
-1. **Start the backend server** (see Backend Setup above)
+### Quick Start (Recommended)
 
-2. **Start the frontend server** (see Frontend Setup above)
+Use the unified startup script to run both servers:
 
-3. **Open your browser** and navigate to `http://localhost:5173`
+```bash
+# Production mode: Build frontend and serve from backend (same port)
+python start.py --unified
+# Access at: http://localhost:8000
 
-4. **Click "Start Interview"** to begin
+# Development mode: Start both backend and frontend separately
+python start.py
+
+# Or with build first
+python start.py --build
+
+# Start only backend
+python start.py --backend-only
+
+# Start only frontend
+python start.py --frontend-only
+
+# Build frontend only
+python start.py --build-only
+```
+
+**Unified Mode (Recommended for Production):**
+- Builds the frontend automatically
+- Serves frontend from backend on port 8000
+- Everything runs on the same port
+- No need to run separate frontend server
+
+### Manual Start
+
+1. **Start LM Studio** (if using local LLM):
+   - Open LM Studio
+   - Load a model
+   - Start the local server (usually runs on port 1234)
+   - The backend will automatically detect and use it
+
+2. **Start the backend server** (see Backend Setup above)
+
+3. **Start the frontend server** (see Frontend Setup above)
+
+4. **Open your browser** and navigate to `http://localhost:5173`
+
+5. **Click "Start Interview"** to begin
 
 5. **Allow microphone and camera permissions** when prompted
 
@@ -178,7 +231,7 @@ The frontend will be available at `http://localhost:5173`
    - Automatically detect when you stop speaking
    - Ask follow-up questions based on your answers
 
-7. **At the end**, you'll receive:
+6. **At the end**, you'll receive:
    - A comprehensive feedback summary
    - An interview score (out of 100)
    - Areas of strength and improvement
@@ -187,7 +240,7 @@ The frontend will be available at `http://localhost:5173`
 
 - **Webcam Video**: Displayed locally only, never transmitted or stored
 - **Audio**: Only text transcripts are sent to the backend, no audio files are saved
-- **Data**: Interview transcripts are processed by Gemini API but not permanently stored by the application
+- **Data**: Interview transcripts are processed by LM Studio (local) or Gemini API but not permanently stored by the application
 - **WebSocket**: All communication is real-time, no persistent storage
 
 ## Interview State Machine
@@ -199,7 +252,7 @@ The system uses a finite state machine to manage interview flow:
 - `WAITING_FOR_USER` → Waiting for user to start speaking
 - `USER_SPEAKING` → User is speaking
 - `SILENCE_DETECTED` → User stopped speaking
-- `PROCESSING_WITH_GEMINI` → Backend processing the answer
+- `PROCESSING_WITH_GEMINI` → Backend processing the answer (using LM Studio or Gemini)
 - `NEXT_QUESTION` → Ready for next question
 - `INTERVIEW_ENDED` → Interview complete
 
@@ -241,10 +294,23 @@ For best experience, use Chrome or Edge.
 - Check microphone permissions
 - Try refreshing the page
 
-### Gemini API errors
+### AI Service errors
+
+**LM Studio issues:**
+- Ensure LM Studio is running and server is started
+- Check that LM Studio is listening on port 1234 (or your configured port)
+- Verify a model is loaded in LM Studio
+- Check backend logs for connection errors
+
+**Gemini API errors (fallback):**
 - Verify your API key is correct in backend `.env`
 - Check API quota/limits
 - Review backend logs for detailed error messages
+
+**Service fallback:**
+- If LM Studio is unavailable, the system automatically falls back to Gemini
+- Check backend logs to see which service is being used
+- You can disable LM Studio by setting `USE_LM_STUDIO=false` in `.env`
 
 ## Development
 
@@ -275,7 +341,10 @@ The backend can be deployed using any ASGI server (uvicorn, gunicorn, etc.)
 ## Environment Variables
 
 ### Backend (.env)
-- `GEMINI_API_KEY`: Your Google Gemini API key (required)
+- `LM_STUDIO_BASE_URL`: LM Studio API base URL (default: http://localhost:1234)
+- `LM_STUDIO_MODEL`: Explicit model name (optional, auto-detected if not set)
+- `USE_LM_STUDIO`: Prefer LM Studio over Gemini (default: true)
+- `GEMINI_API_KEY`: Your Google Gemini API key (required for fallback)
 - `PORT`: Backend server port (default: 8000)
 - `CORS_ORIGINS`: Comma-separated list of allowed origins
 
@@ -300,5 +369,5 @@ For issues or questions, please check:
 
 ---
 
-Built with ❤️ using React, FastAPI, and Google Gemini
+Built with ❤️ using React, FastAPI, LM Studio, and Google Gemini
 # new-mockinterview

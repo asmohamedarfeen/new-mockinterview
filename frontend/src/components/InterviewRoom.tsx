@@ -26,7 +26,6 @@ export const InterviewRoom: React.FC<InterviewRoomProps> = ({
   const {
     state,
     transcript,
-    isActive,
     feedback,
     score,
     error,
@@ -60,6 +59,27 @@ export const InterviewRoom: React.FC<InterviewRoomProps> = ({
     },
   });
 
+  // Sync connectionError from WebSocket hook to store error
+  useEffect(() => {
+    if (connectionError) {
+      setError(connectionError);
+    }
+  }, [connectionError, setError]);
+
+  // Also check connection status and show error if disconnected for too long
+  useEffect(() => {
+    if (!isConnected && !connectionError && interviewId) {
+      // Wait a bit before showing connection error (give it time to connect)
+      const timeout = setTimeout(() => {
+        if (!isConnected) {
+          setError('Unable to connect to server. Please ensure the backend is running on port 8000.');
+        }
+      }, 5000); // 5 second timeout
+      
+      return () => clearTimeout(timeout);
+    }
+  }, [isConnected, connectionError, interviewId, setError]);
+
   // Speech Synthesis - TTS for AI questions
   const { isSpeaking, speak, cancel: cancelTTS } = useSpeechSynthesis({
     onEnd: () => {
@@ -78,7 +98,7 @@ export const InterviewRoom: React.FC<InterviewRoomProps> = ({
   });
 
   // Speech Recognition - STT for user answers
-  const { isListening, transcript: speechTranscript, start: startSTT, stop: stopSTT } = useSpeechRecognition({
+  const { isListening, start: startSTT, stop: stopSTT } = useSpeechRecognition({
     onTranscript: (finalTranscript) => {
       if (finalTranscript.trim()) {
         // Send transcript to backend
@@ -254,10 +274,21 @@ export const InterviewRoom: React.FC<InterviewRoomProps> = ({
                   Please add a valid Gemini API key to <code className="bg-black bg-opacity-30 px-1 rounded">backend/.env</code>
                 </p>
               )}
+              {error.includes('Connection') && error.includes('0.0.0.0') && (
+                <p className="text-xs mt-2 opacity-90">
+                  💡 <strong>Tip:</strong> Use <code className="bg-black bg-opacity-30 px-1 rounded">localhost:8000</code> instead of <code className="bg-black bg-opacity-30 px-1 rounded">0.0.0.0:8000</code> for better compatibility
+                </p>
+              )}
+              {error.includes('Connection') && !error.includes('0.0.0.0') && (
+                <p className="text-xs mt-2 opacity-90">
+                  💡 <strong>Tip:</strong> Make sure the backend server is running: <code className="bg-black bg-opacity-30 px-1 rounded">cd backend && source venv/bin/activate && python -m uvicorn app.main:app --reload</code>
+                </p>
+              )}
             </div>
             <button
               onClick={() => {
-                setError(undefined);
+                const { clearError } = useInterviewStore.getState();
+                clearError();
                 if (onEnd) onEnd();
               }}
               className="text-white hover:text-gray-200"

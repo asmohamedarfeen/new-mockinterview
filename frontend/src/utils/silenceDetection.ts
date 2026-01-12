@@ -14,7 +14,7 @@ const DEFAULT_OPTIONS: Required<SilenceDetectionOptions> = {
 export class SilenceDetector {
   private silenceTimeout: number;
   private minSpeechDuration: number;
-  private silenceTimer: NodeJS.Timeout | null = null;
+  private silenceTimer: ReturnType<typeof setTimeout> | null = null;
   private speechStartTime: number | null = null;
   private onSilenceDetected: () => void;
   private isActive: boolean = false;

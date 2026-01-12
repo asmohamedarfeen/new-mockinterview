@@ -14,7 +14,7 @@ export const UserCamera: React.FC<UserCameraProps> = ({
   isEnabled,
   onError,
 }) => {
-  const { stream, isActive, error, start, stop, videoRef } = useWebcam({ onError });
+  const { isActive, error, start, stop, videoRef } = useWebcam({ onError });
 
   useEffect(() => {
     if (isEnabled && !isActive) {
@@ -28,12 +28,30 @@ export const UserCamera: React.FC<UserCameraProps> = ({
     return null;
   }
 
+  // If camera has an error and it's not critical, show a minimal indicator
+  // Camera is optional - interview can proceed without it
+  if (error && error.includes('Interview can still proceed')) {
+    // Show a small, non-intrusive indicator that camera is unavailable
+    return (
+      <div className="absolute bottom-4 right-4 w-48 h-36 md:w-64 md:h-48 bg-meet-dark rounded-lg overflow-hidden shadow-2xl border-2 border-meet-gray z-10 opacity-50">
+        <div className="w-full h-full flex items-center justify-center bg-meet-gray bg-opacity-80">
+          <div className="text-white text-xs text-center px-2">
+            <div className="mb-1 text-2xl">📷</div>
+            <div className="text-[10px] leading-tight">Camera unavailable</div>
+            <div className="text-[9px] mt-1 opacity-75">Interview continues</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="absolute bottom-4 right-4 w-48 h-36 md:w-64 md:h-48 bg-meet-dark rounded-lg overflow-hidden shadow-2xl border-2 border-meet-blue z-10">
       {error ? (
-        <div className="w-full h-full flex items-center justify-center bg-meet-gray">
+        <div className="w-full h-full flex items-center justify-center bg-meet-gray bg-opacity-80">
           <div className="text-white text-xs text-center px-2">
-            {error}
+            <div className="mb-1">📷</div>
+            <div className="text-[10px] leading-tight">{error}</div>
           </div>
         </div>
       ) : (

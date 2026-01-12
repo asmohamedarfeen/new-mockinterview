@@ -72,9 +72,20 @@ class GeminiService:
         # Configure the Gemini API client with the API key
         genai.configure(api_key=api_key)
         
-        # Create a GenerativeModel instance using 'gemini-pro'
-        # This is the model that will generate responses
-        self.model = genai.GenerativeModel('gemini-pro')
+        # Create a GenerativeModel instance
+        # Use models/gemini-2.0-flash which is available and works well for conversations
+        # Alternative models: models/gemini-2.5-flash, models/gemini-2.5-pro
+        # The 'models/' prefix is required for the newer API versions
+        try:
+            # Try gemini-2.0-flash first (fast and reliable)
+            self.model = genai.GenerativeModel('models/gemini-2.0-flash')
+        except Exception as e1:
+            try:
+                # Fallback to gemini-2.5-flash
+                self.model = genai.GenerativeModel('models/gemini-2.5-flash')
+            except Exception as e2:
+                # Last resort: try without prefix (older API versions)
+                self.model = genai.GenerativeModel('gemini-pro')
         
         # Store conversation history for each interview
         # Key: interview_id, Value: List of message dicts

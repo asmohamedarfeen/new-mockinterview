@@ -3,6 +3,7 @@ WebSocket connection manager for interview sessions.
 """
 import json
 import logging
+import asyncio
 from typing import Dict, Optional
 from fastapi import WebSocket, WebSocketDisconnect
 from .models import (
@@ -16,7 +17,7 @@ from .models import (
     InterviewState
 )
 from .interview_state import state_manager
-from .gemini_service import get_gemini_service
+from .ai_service import get_ai_service
 import time
 
 logger = logging.getLogger(__name__)
@@ -45,11 +46,18 @@ class ConnectionManager:
         if interview_id in self.active_connections:
             try:
                 websocket = self.active_connections[interview_id]
+                # Check if connection is still open before sending
+                if websocket.client_state.name != "CONNECTED":
+                    logger.warning(f"WebSocket for {interview_id} is not connected (state: {websocket.client_state.name})")
+                    self.disconnect(interview_id)
+                    return
                 await websocket.send_json(message)
             except Exception as e:
-                logger.error(f"Error sending message to {interview_id}: {e}")
+                # Don't log as error if connection is already closed - this is expected
+                if "no close frame" not in str(e).lower() and "connection closed" not in str(e).lower():
+                    logger.error(f"Error sending message to {interview_id}: {e}")
                 self.disconnect(interview_id)
-                raise
+                # Don't raise - just log and disconnect gracefully
     
     async def send_error(self, interview_id: str, error: str, code: Optional[str] = None):
         """Send an error message."""
@@ -73,30 +81,37 @@ async def handle_websocket(websocket: WebSocket, interview_id: str):
     Flow:
     1. Accept connection and send ACK
     2. Initialize interview session
-    3. Get AI greeting from Gemini
+    3. Get AI greeting from AI service (LM Studio or Gemini)
     4. Send greeting to client
     5. Wait for user transcripts
-    6. Process with Gemini
+    6. Process with AI service
     7. Send next question or end signal
     """
     await connection_manager.connect(websocket, interview_id)
     
     try:
-        # Send connection acknowledgment
+        # Send connection acknowledgment immediately and directly
+        # This ensures the client knows the connection is established
         ack = ConnectionAckMessage(
             interview_id=interview_id,
             timestamp=time.time()
         )
-        await connection_manager.send_message(interview_id, ack.model_dump())
+        try:
+            await websocket.send_json(ack.model_dump())
+            logger.info(f"Connection ACK sent for interview {interview_id}")
+        except Exception as e:
+            logger.warning(f"Failed to send ACK to {interview_id}: {e}")
+            # If we can't send ACK, the connection is likely broken
+            return
         
         # Create or get interview session
         session = state_manager.get_session(interview_id)
         if not session:
             session = state_manager.create_session(interview_id)
-            # Initialize Gemini conversation
+            # Initialize AI conversation (tries LM Studio first, falls back to Gemini)
             try:
-                gemini_service = get_gemini_service()
-                greeting = gemini_service.initialize_conversation(interview_id)
+                ai_service = get_ai_service()
+                greeting = ai_service.initialize_conversation(interview_id)
                 
                 # Transition to AI_SPEAKING state
                 session.transition_to(InterviewState.AI_SPEAKING)
@@ -129,10 +144,13 @@ async def handle_websocket(websocket: WebSocket, interview_id: str):
             except Exception as e:
                 logger.error(f"Error initializing interview {interview_id}: {e}", exc_info=True)
                 error_msg = str(e)
-                # Check if it's an API key issue
+                # Check if it's an API key issue or service unavailable
                 if "API_KEY" in error_msg or "api key" in error_msg.lower() or "authentication" in error_msg.lower():
-                    error_msg = "Invalid or missing Gemini API key. Please check your backend .env file."
+                    error_msg = "Invalid or missing API key. Please check your backend .env file."
+                elif "not available" in error_msg.lower() or "not reachable" in error_msg.lower():
+                    error_msg = "AI service is not available. Please ensure LM Studio is running or Gemini API key is configured."
                 
+                # Send error message first
                 await connection_manager.send_error(
                     interview_id,
                     error_msg,
@@ -140,6 +158,15 @@ async def handle_websocket(websocket: WebSocket, interview_id: str):
                 )
                 # Set session to ended state
                 session.transition_to(InterviewState.INTERVIEW_ENDED)
+                
+                # Send state update
+                state_msg = InterviewStateMessage(
+                    interview_id=interview_id,
+                    state=InterviewState.INTERVIEW_ENDED,
+                    timestamp=time.time()
+                )
+                await connection_manager.send_message(interview_id, state_msg.model_dump())
+                
                 end_msg = InterviewEndMessage(
                     interview_id=interview_id,
                     feedback=f"Interview could not be started: {error_msg}",
@@ -148,10 +175,15 @@ async def handle_websocket(websocket: WebSocket, interview_id: str):
                     timestamp=time.time()
                 )
                 await connection_manager.send_message(interview_id, end_msg.model_dump())
-                # Exit the function - connection will close naturally
+                
+                # Wait longer to ensure messages are sent before closing
+                await asyncio.sleep(1.0)
+                
+                # Keep connection open briefly to allow frontend to receive messages
+                # The connection will close naturally when the function returns
                 return
         
-        # Main message loop
+        # Main message loop - only enters if initialization was successful
         while True:
             try:
                 # Receive message from client
@@ -180,10 +212,10 @@ async def handle_websocket(websocket: WebSocket, interview_id: str):
                     )
                     await connection_manager.send_message(interview_id, state_msg.model_dump())
                     
-                    # Process with Gemini
+                    # Process with AI service (LM Studio or Gemini)
                     try:
-                        gemini_service = get_gemini_service()
-                        result = gemini_service.process_answer(
+                        ai_service = get_ai_service()
+                        result = ai_service.process_answer(
                             interview_id,
                             transcript_msg.transcript
                         )
@@ -203,7 +235,7 @@ async def handle_websocket(websocket: WebSocket, interview_id: str):
                             
                             # Cleanup
                             state_manager.remove_session(interview_id)
-                            gemini_service.cleanup(interview_id)
+                            ai_service.cleanup(interview_id)
                             break
                         else:
                             # Next question
@@ -276,7 +308,7 @@ async def handle_websocket(websocket: WebSocket, interview_id: str):
         connection_manager.disconnect(interview_id)
         state_manager.remove_session(interview_id)
         try:
-            gemini_service = get_gemini_service()
-            gemini_service.cleanup(interview_id)
+            ai_service = get_ai_service()
+            ai_service.cleanup(interview_id)
         except:
             pass  # Ignore cleanup errors

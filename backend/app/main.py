@@ -16,8 +16,11 @@ The server handles WebSocket connections for interview sessions where:
 
 import os
 import logging
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from pathlib import Path
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from .websocket_manager import handle_websocket
 from .models import ErrorMessage
@@ -46,9 +49,14 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Get project root directory (parent of backend directory)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
+FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
+
 # Configure CORS (Cross-Origin Resource Sharing) middleware
 # This allows the frontend (running on a different port) to make requests to the backend
 # Without CORS, browsers block requests from different origins for security
+# When serving from same port, CORS is less critical but still useful for development
 cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
 app.add_middleware(
     CORSMiddleware,
@@ -58,26 +66,52 @@ app.add_middleware(
     allow_headers=["*"],  # Allow all headers
 )
 
+# Mount static files from frontend dist directory if it exists
+# This serves the built React app from the backend
+if FRONTEND_DIST.exists() and (FRONTEND_DIST / "index.html").exists():
+    # Mount static assets (JS, CSS, images, etc.)
+    app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="assets")
+    
+    # Serve other static files (favicon, etc.) from dist root
+    static_files = ["favicon.ico", "robots.txt", "manifest.json"]
+    for static_file in static_files:
+        static_path = FRONTEND_DIST / static_file
+        if static_path.exists():
+            @app.get(f"/{static_file}")
+            async def serve_static_file(file_name: str = static_file):
+                return FileResponse(str(FRONTEND_DIST / file_name))
+    
+    logger.info(f"Serving frontend from: {FRONTEND_DIST}")
+else:
+    logger.warning(f"Frontend dist directory not found at {FRONTEND_DIST}. Frontend will not be served.")
+
 
 @app.get("/")
-async def root():
+async def root(request: Request):
     """
-    Root endpoint - provides basic API information.
+    Root endpoint - serves frontend if available, otherwise returns API info.
     
-    This is a simple GET endpoint that returns API metadata.
-    Useful for checking if the server is running.
+    If the frontend is built and available, this serves the React app.
+    Otherwise, it returns API metadata.
     
     Returns:
-        dict: API name, version, and status
+        FileResponse: Frontend index.html if available
+        dict: API metadata if frontend not available
     """
+    # Check if frontend is available
+    if FRONTEND_DIST.exists() and (FRONTEND_DIST / "index.html").exists():
+        return FileResponse(str(FRONTEND_DIST / "index.html"))
+    
+    # Fallback to API info if frontend not built
     return {
         "message": "Virtual AI Interview Room API",
         "version": "1.0.0",
-        "status": "running"
+        "status": "running",
+        "frontend": "not built - run 'npm run build' in frontend directory"
     }
 
 
-@app.get("/health")
+@app.get("/api/health")
 async def health_check():
     """
     Health check endpoint for monitoring and load balancers.
@@ -86,6 +120,8 @@ async def health_check():
     - Monitoring systems to check if the server is alive
     - Load balancers to determine if the server can handle traffic
     - CI/CD pipelines to verify deployment success
+    
+    Note: Using /api/health to avoid conflicts with frontend routes
     
     Returns:
         dict: Health status and current timestamp
@@ -108,9 +144,9 @@ async def websocket_endpoint(websocket: WebSocket, interview_id: str):
     Flow:
     1. Client connects to this endpoint with a unique interview_id
     2. Server accepts the connection and sends acknowledgment
-    3. Server initializes Gemini conversation and sends greeting
+    3. Server initializes AI conversation (LM Studio or Gemini) and sends greeting
     4. Client sends user transcripts when they speak
-    5. Server processes with Gemini and sends next question
+    5. Server processes with AI service and sends next question
     6. This continues until interview ends
     
     Args:
@@ -125,6 +161,34 @@ async def websocket_endpoint(websocket: WebSocket, interview_id: str):
     # Delegate WebSocket handling to the websocket_manager module
     # This keeps the main.py file clean and separates concerns
     await handle_websocket(websocket, interview_id)
+
+
+# Catch-all route for frontend routing (SPA)
+# This must be last to not interfere with API routes
+@app.get("/{full_path:path}")
+async def serve_frontend(full_path: str, request: Request):
+    """
+    Catch-all route to serve frontend for client-side routing.
+    
+    This handles all routes that don't match API endpoints, allowing
+    the React Router (or other SPA routing) to handle navigation.
+    
+    Args:
+        full_path: The requested path
+        request: FastAPI request object
+    
+    Returns:
+        FileResponse: Frontend index.html for SPA routing
+    """
+    # Don't serve frontend for API routes or WebSocket
+    if full_path.startswith(("api/", "ws/", "docs", "openapi.json")):
+        return {"error": "Not found"}
+    
+    # Serve frontend index.html for all other routes
+    if FRONTEND_DIST.exists() and (FRONTEND_DIST / "index.html").exists():
+        return FileResponse(str(FRONTEND_DIST / "index.html"))
+    
+    return {"error": "Frontend not built"}
 
 
 # This block runs only when the file is executed directly (not imported)

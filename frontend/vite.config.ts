@@ -7,5 +7,12 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true
-  }
+  },
+  build: {
+    outDir: 'dist',
+    // Ensure assets are referenced correctly when served from backend
+    assetsDir: 'assets',
+  },
+  // Use relative paths for production build
+  base: './',
 })
