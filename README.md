@@ -1,4 +1,6 @@
+# Virtual AI Interview Room
 
+A production-ready web application that simulates a real virtual interview room similar to Google Meet/Google Classroom with an AI interviewer powered by LM Studio (local LLM) with automatic fallback to Google Gemini.
 
 ## Features
 
